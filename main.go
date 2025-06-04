@@ -48,12 +48,12 @@ func parseTimeMoscow(timestr string) (time.Time, error) {
 	if len(parts) != 2 {
 		return time.Time{}, fmt.Errorf("некорректный формат времени: %s", timestr)
 	}
-	var hour, min int
-	_, err = fmt.Sscanf(timestr, "%d:%d", &hour, &min)
+	var hour, minute int
+	_, err = fmt.Sscanf(timestr, "%d:%d", &hour, &minute)
 	if err != nil {
 		return time.Time{}, err
 	}
-	t := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, loc)
+	t := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, loc)
 	if t.Before(now) {
 		t = t.Add(24 * time.Hour)
 	}
@@ -64,7 +64,7 @@ func isWeekend(t time.Weekday) bool {
 	return t == time.Saturday || t == time.Sunday
 }
 
-func scheduleReminder(bot *tgbotapi.BotAPI, chatID int64, r Reminder, loc *time.Location) {
+func scheduleReminder(bot *tgbotapi.BotAPI, chatID int64, r Reminder) {
 	timeToSend, err := parseTimeMoscow(r.Time)
 	if err != nil {
 		log.Printf("⚠️ Ошибка времени в напоминании: %v", err)
@@ -138,7 +138,7 @@ func main() {
 
 			for _, tr := range sorted {
 				log.Printf("⏳ Напоминание \"%s\" через %s (%s)", tr.Reminder.Message, tr.Dur.Round(time.Second), tr.When.Format(time.RFC822))
-				go scheduleReminder(bot, chatID, tr.Reminder, loc)
+				go scheduleReminder(bot, chatID, tr.Reminder)
 			}
 
 			log.Printf("✅ Все %d напоминаний запланированы", len(sorted))
