@@ -1,4 +1,4 @@
-APP_NAME = dailyDevPing
+APP_NAME = wakeUpDev
 ENV_FILE = .env
 ENV_EXAMPLE = .env.example
 BIN = ./$(APP_NAME)
