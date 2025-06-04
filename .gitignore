@@ -1,0 +1,5 @@
+.idea
+/logs
+/run
+.env
+dailyDevPing
