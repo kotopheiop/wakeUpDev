@@ -7,7 +7,7 @@ RUN_DIR = ./run
 LOG_FILE = $(LOG_DIR)/$(APP_NAME).log
 PID_FILE = $(RUN_DIR)/$(APP_NAME).pid
 
-.PHONY: .env build run start stop logs clean
+.PHONY: .env test build run start stop logs clean
 
 .env:
 	@if [ ! -f $(ENV_FILE) ]; then \
@@ -17,7 +17,11 @@ PID_FILE = $(RUN_DIR)/$(APP_NAME).pid
 		echo "✅ $(ENV_FILE) уже существует, пропускаем копирование"; \
 	fi
 
-build: .env
+test: .env
+	@echo "🧪 Запуск тестов..."
+	@go test -v ./... && echo "✅ Тесты пройдены" || (echo "❌ Тесты не прошли. Сборка невозможна." && exit 1)
+
+build: test
 	@echo "🔧 Сборка $(APP_NAME)..."
 	@go build -o $(BIN) main.go
 	@echo "✅ Сборка завершена"
@@ -32,7 +36,6 @@ start: build
 	@sh -c 'nohup $(BIN) >> $(LOG_FILE) 2>&1 & echo $$! > $(PID_FILE)'
 	@echo "📌 PID сохранён в $(PID_FILE)"
 	@echo "📜 Логи: tail -f $(LOG_FILE)"
-
 
 stop:
 	@echo "🛑 Остановка $(APP_NAME)..."

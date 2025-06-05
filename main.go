@@ -105,9 +105,9 @@ func main() {
 	groupChatID := mustEnv("GROUP_CHAT_ID")
 	chatID := mustParseInt64(groupChatID)
 	reminderPath := mustEnv("REMINDERS_FILE") // например reminders.json
-	timeLocation := mustEnv("TIME_LOCATION")
+	timezone := mustEnv("TIMEZONE")
 
-	loc, _ := time.LoadLocation(timeLocation)
+	loc, _ := time.LoadLocation(timezone)
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Fatalf("❌ Ошибка инициализации бота: %v", err)
