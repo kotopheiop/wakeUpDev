@@ -43,6 +43,7 @@
    ```env
    BOT_TOKEN=your_telegram_bot_token
    GROUP_CHAT_ID=-1001234567890
+   TIME_LOCATION="Europe/Moscow"
    ```
 
 2. Создайте файл `reminders.json` с нужным расписанием.
