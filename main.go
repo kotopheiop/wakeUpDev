@@ -11,14 +11,24 @@ import (
 
 	"github.com/anatoliyfedorenko/isdayoff"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
-	_ "github.com/goforj/godump" // For debugging
 	"github.com/joho/godotenv"
 )
+
+const N_WORKERS = 3 // Кол-во одновременных горутин отправки сообщений
 
 type Reminder struct {
 	Time    string `json:"time"`    // В формате HH:MM
 	Message string `json:"message"` // HTML-сообщение
 }
+
+type ReminderJob struct {
+	Reminder Reminder
+	Bot      *tgbotapi.BotAPI
+	ChatID   int64
+	Loc      *time.Location
+}
+
+var loc *time.Location
 
 func mustEnv(key string) string {
 	val := os.Getenv(key)
@@ -40,18 +50,10 @@ func loadReminders(path string) ([]Reminder, error) {
 	return reminders, nil
 }
 
-func parseTimeMoscow(timestr string) (time.Time, error) {
-	loc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		return time.Time{}, err
-	}
+func parseTime(timestr string) (time.Time, error) {
 	now := time.Now().In(loc)
-	parts := strings.Split(timestr, ":")
-	if len(parts) != 2 {
-		return time.Time{}, fmt.Errorf("некорректный формат времени: %s", timestr)
-	}
 	var hour, minute int
-	_, err = fmt.Sscanf(timestr, "%d:%d", &hour, &minute)
+	_, err := fmt.Sscanf(timestr, "%d:%d", &hour, &minute)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -63,51 +65,65 @@ func parseTimeMoscow(timestr string) (time.Time, error) {
 }
 
 func isWeekend() bool {
+	now := time.Now().In(loc)
+
 	dayOff := isdayoff.New()
 	countryCode := isdayoff.CountryCodeRussia
-	pre := false
-	covid := false
-	day, _ := dayOff.Today(isdayoff.Params{
+	pre, covid := false, false
+	year, month, day := now.Date()
+
+	dayType, _ := dayOff.Today(isdayoff.Params{
 		CountryCode: &countryCode,
 		Pre:         &pre,
 		Covid:       &covid,
+		Year:        year,
+		Month:       &month,
+		Day:         &day,
 	})
 
-	return *day == isdayoff.DayTypeNonWorking
+	return *dayType == isdayoff.DayTypeNonWorking
 }
 
-func scheduleReminder(bot *tgbotapi.BotAPI, chatID int64, r Reminder) {
-	timeToSend, err := parseTimeMoscow(r.Time)
-	if err != nil {
-		log.Printf("⚠️ Ошибка времени в напоминании: %v", err)
-		return
-	}
-	dur := time.Until(timeToSend)
-	log.Printf("⏳ Напоминание \"%s\" через %s (%s)", r.Message, dur.Round(time.Second), timeToSend.Format(time.RFC822))
-	time.Sleep(dur)
+func scheduleReminderWorker(jobs <-chan ReminderJob) {
+	for job := range jobs {
+		r := job.Reminder
+		timeToSend, err := parseTime(r.Time)
+		if err != nil {
+			log.Printf("⚠️ Ошибка времени в напоминании: %v", err)
+			continue
+		}
+		dur := time.Until(timeToSend)
+		log.Printf("⏳ [%s] через %s", minimizeString(r.Message, 20), dur.Round(time.Second))
+		time.Sleep(dur)
 
-	msg := tgbotapi.NewMessage(chatID, r.Message)
-	msg.ParseMode = "HTML"
-	if _, err := bot.Send(msg); err != nil {
-		log.Printf("❌ Не удалось отправить: %v", err)
-	} else {
-		log.Printf("✅ Напоминание отправлено: \"%s\"", r.Message)
+		msg := tgbotapi.NewMessage(job.ChatID, r.Message)
+		msg.ParseMode = "HTML"
+		if _, err := job.Bot.Send(msg); err != nil {
+			log.Printf("❌ Не удалось отправить: %v", err)
+		} else {
+			log.Printf("✅ Напоминание отправлено: \"%s\"", minimizeString(r.Message, 20))
+		}
 	}
 }
 
 func main() {
-	err := godotenv.Load()
-	if err != nil {
+	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️ .env не найден, читаем переменные окружения напрямую")
 	}
 
 	botToken := mustEnv("BOT_TOKEN")
 	groupChatID := mustEnv("GROUP_CHAT_ID")
 	chatID := mustParseInt64(groupChatID)
-	reminderPath := mustEnv("REMINDERS_FILE") // например reminders.json
+	reminderPath := mustEnv("REMINDERS_FILE")
 	timezone := mustEnv("TIMEZONE")
 
-	loc, _ := time.LoadLocation(timezone)
+	var err error
+
+	loc, err = time.LoadLocation(timezone)
+	if err != nil {
+		log.Fatalf("❌ Ошибка загрузки часового пояса %s: %v", timezone, err)
+	}
+
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Fatalf("❌ Ошибка инициализации бота: %v", err)
@@ -131,7 +147,7 @@ func main() {
 			var sorted []TimedReminder
 
 			for _, r := range reminders {
-				t, err := parseTimeMoscow(r.Time)
+				t, err := parseTime(r.Time)
 				if err != nil {
 					log.Printf("⚠️ Ошибка времени: %v", err)
 					continue
@@ -143,17 +159,27 @@ func main() {
 				})
 			}
 
-			// Сортировка по времени отправки
 			sort.Slice(sorted, func(i, j int) bool {
 				return sorted[i].When.Before(sorted[j].When)
 			})
 
-			for _, tr := range sorted {
-				log.Printf("⏳ Напоминание \"%s\" через %s (%s)", tr.Reminder.Message, tr.Dur.Round(time.Second), tr.When.Format(time.RFC822))
-				go scheduleReminder(bot, chatID, tr.Reminder)
+			jobs := make(chan ReminderJob, len(sorted))
+
+			for i := 0; i < N_WORKERS; i++ {
+				go scheduleReminderWorker(jobs)
 			}
 
-			log.Printf("✅ Все %d напоминаний запланированы", len(sorted))
+			for _, tr := range sorted {
+				jobs <- ReminderJob{
+					Reminder: tr.Reminder,
+					Bot:      bot,
+					ChatID:   chatID,
+					Loc:      loc,
+				}
+			}
+
+			close(jobs)
+			log.Printf("✅ Все %d напоминаний отправлены в пул", len(sorted))
 		}
 
 		now := time.Now().In(loc)
@@ -162,7 +188,6 @@ func main() {
 		log.Printf("😴 Бот уходит в сон до %s (через %s)", next.Format(time.RFC822), sleepDur.Round(time.Second))
 		time.Sleep(sleepDur)
 	}
-
 }
 
 func mustParseInt64(s string) int64 {
@@ -172,4 +197,15 @@ func mustParseInt64(s string) int64 {
 		log.Fatalf("Неверный формат числа: %s", s)
 	}
 	return id
+}
+
+func minimizeString(s string, max int) string {
+	cleaned := strings.ReplaceAll(s, "\n", " ")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "")
+	cleaned = strings.ReplaceAll(cleaned, "\t", " ")
+	runes := []rune(cleaned)
+	if len(runes) <= max {
+		return cleaned
+	}
+	return string(runes[:max]) + "..."
 }
