@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anatoliyfedorenko/isdayoff"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+	_ "github.com/goforj/godump" // For debugging
 	"github.com/joho/godotenv"
 )
 
@@ -60,8 +62,18 @@ func parseTimeMoscow(timestr string) (time.Time, error) {
 	return t, nil
 }
 
-func isWeekend(t time.Weekday) bool {
-	return t == time.Saturday || t == time.Sunday
+func isWeekend() bool {
+	dayOff := isdayoff.New()
+	countryCode := isdayoff.CountryCodeRussia
+	pre := false
+	covid := false
+	day, _ := dayOff.Today(isdayoff.Params{
+		CountryCode: &countryCode,
+		Pre:         &pre,
+		Covid:       &covid,
+	})
+
+	return *day == isdayoff.DayTypeNonWorking
 }
 
 func scheduleReminder(bot *tgbotapi.BotAPI, chatID int64, r Reminder) {
@@ -107,8 +119,7 @@ func main() {
 			log.Fatalf("❌ Не удалось загрузить напоминания: %v", err)
 		}
 
-		weekday := time.Now().In(loc).Weekday()
-		if isWeekend(weekday) {
+		if isWeekend() {
 			log.Println("🏖 Сегодня выходной. Напоминания не будут отправлены.")
 		} else {
 			type TimedReminder struct {
