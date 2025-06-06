@@ -5,27 +5,17 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/anatoliyfedorenko/isdayoff"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/joho/godotenv"
+	"github.com/robfig/cron/v3"
 )
-
-const N_WORKERS = 3 // Кол-во одновременных горутин отправки сообщений
 
 type Reminder struct {
 	Time    string `json:"time"`    // В формате HH:MM
 	Message string `json:"message"` // HTML-сообщение
-}
-
-type ReminderJob struct {
-	Reminder Reminder
-	Bot      *tgbotapi.BotAPI
-	ChatID   int64
-	Loc      *time.Location
 }
 
 var loc *time.Location
@@ -36,6 +26,15 @@ func mustEnv(key string) string {
 		log.Fatalf("⛔ Переменная окружения %s не установлена", key)
 	}
 	return val
+}
+
+func mustParseInt64(s string) int64 {
+	var id int64
+	_, err := fmt.Sscanf(s, "%d", &id)
+	if err != nil {
+		log.Fatalf("Неверный формат числа: %s", s)
+	}
+	return id
 }
 
 func loadReminders(path string) ([]Reminder, error) {
@@ -50,20 +49,6 @@ func loadReminders(path string) ([]Reminder, error) {
 	return reminders, nil
 }
 
-func parseTime(timestr string) (time.Time, error) {
-	now := time.Now().In(loc)
-	var hour, minute int
-	_, err := fmt.Sscanf(timestr, "%d:%d", &hour, &minute)
-	if err != nil {
-		return time.Time{}, err
-	}
-	t := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, loc)
-	if t.Before(now) {
-		t = t.Add(24 * time.Hour)
-	}
-	return t, nil
-}
-
 func isWeekend() bool {
 	now := time.Now().In(loc)
 
@@ -71,150 +56,108 @@ func isWeekend() bool {
 	countryCode := isdayoff.CountryCodeRussia
 	pre, covid := false, false
 	year, month, day := now.Date()
-
-	dayType, _ := dayOff.Today(isdayoff.Params{
+	params := isdayoff.Params{
 		CountryCode: &countryCode,
 		Pre:         &pre,
 		Covid:       &covid,
 		Year:        year,
 		Month:       &month,
 		Day:         &day,
-	})
+	}
+	dayType, _ := dayOff.Today(params)
 
 	return *dayType == isdayoff.DayTypeNonWorking
 }
 
-func scheduleReminderWorker(jobs <-chan ReminderJob) {
-	for job := range jobs {
-		r := job.Reminder
-		timeToSend, err := parseTime(r.Time)
-		if err != nil {
-			log.Printf("⚠️ Ошибка времени в напоминании: %v", err)
-			continue
-		}
-		dur := time.Until(timeToSend)
-		log.Printf("⏳ [%s] через %s", minimizeString(r.Message, 20), dur.Round(time.Second))
-		time.Sleep(dur)
+func parseHourMinute(timeStr string) (hour, minute int, err error) {
+	_, err = fmt.Sscanf(timeStr, "%d:%d", &hour, &minute)
+	if err != nil {
+		return
+	}
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		err = fmt.Errorf("некорректное время: %s", timeStr)
+	}
+	return
+}
 
-		msg := tgbotapi.NewMessage(job.ChatID, r.Message)
+func createCronJob(c *cron.Cron, r Reminder, bot *tgbotapi.BotAPI, chatID int64) error {
+	hour, minute, err := parseHourMinute(r.Time)
+	if err != nil {
+		return err
+	}
+
+	// Cron формат: MIN HOUR * * *
+	cronExpr := fmt.Sprintf("%d %d * * *", minute, hour)
+
+	handler := func() {
+		if isWeekend() {
+			log.Printf("🏖 [%s] Выходной день, напоминание пропущено", r.Time)
+			return
+		}
+
+		msg := tgbotapi.NewMessage(chatID, r.Message)
 		msg.ParseMode = "HTML"
-		if _, err := job.Bot.Send(msg); err != nil {
-			log.Printf("❌ Не удалось отправить: %v", err)
+		if _, err := bot.Send(msg); err != nil {
+			log.Printf("❌ Не отправлено [%s]: %v", r.Time, err)
 		} else {
-			log.Printf("✅ Напоминание отправлено: \"%s\"", minimizeString(r.Message, 20))
+			log.Printf("✅ Отправлено [%s]: %s", r.Time, r.Message[:min(len(r.Message), 20)])
 		}
 	}
+
+	entryID, err := c.AddFunc(cronExpr, handler)
+	if err == nil {
+		log.Printf("✅ Задача на время %s запланирована ID: [%d]", r.Time, entryID)
+	}
+
+	return err
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️ .env не найден, читаем переменные окружения напрямую")
+		log.Println("⚠️ .env не найден, читаем переменные напрямую")
 	}
 
 	botToken := mustEnv("BOT_TOKEN")
 	groupChatID := mustEnv("GROUP_CHAT_ID")
-	chatID := mustParseInt64(groupChatID)
 	reminderPath := mustEnv("REMINDERS_FILE")
 	timezone := mustEnv("TIMEZONE")
 
-	var err error
+	chatID := mustParseInt64(groupChatID)
 
+	var err error
 	loc, err = time.LoadLocation(timezone)
 	if err != nil {
-		log.Fatalf("❌ Ошибка загрузки часового пояса %s: %v", timezone, err)
+		log.Fatalf("❌ Ошибка часового пояса: %v", err)
 	}
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Fatalf("❌ Ошибка инициализации бота: %v", err)
 	}
-	log.Printf("✅ Бот запущен как @%s", bot.Self.UserName)
+	log.Printf("🤖 Бот запущен как @%s", bot.Self.UserName)
 
-	for {
-		reminders, err := loadReminders(reminderPath)
-		if err != nil {
-			log.Fatalf("❌ Не удалось загрузить напоминания: %v", err)
-		}
-
-		if isWeekend() {
-			log.Println("🏖 Сегодня выходной. Напоминания не будут отправлены.")
-		} else {
-			type TimedReminder struct {
-				Reminder Reminder
-				When     time.Time
-				Dur      time.Duration
-			}
-			var sorted []TimedReminder
-
-			now := time.Now().In(loc)
-
-			for _, r := range reminders {
-				t, err := parseTime(r.Time)
-				if err != nil {
-					log.Printf("⚠️ Ошибка времени: %v", err)
-					continue
-				}
-
-				// Если время уже прошло в текущем дне — пропускаем
-				if t.Before(now) {
-					log.Printf("⏰ Время %s уже прошло, пропускаем", r.Time)
-					continue
-				}
-
-				sorted = append(sorted, TimedReminder{
-					Reminder: r,
-					When:     t,
-					Dur:      time.Until(t),
-				})
-			}
-
-			sort.Slice(sorted, func(i, j int) bool {
-				return sorted[i].When.Before(sorted[j].When)
-			})
-
-			jobs := make(chan ReminderJob, len(sorted))
-
-			for i := 0; i < N_WORKERS; i++ {
-				go scheduleReminderWorker(jobs)
-			}
-
-			for _, tr := range sorted {
-				jobs <- ReminderJob{
-					Reminder: tr.Reminder,
-					Bot:      bot,
-					ChatID:   chatID,
-					Loc:      loc,
-				}
-			}
-
-			close(jobs)
-			log.Printf("✅ Все %d напоминаний отправлены в пул", len(sorted))
-		}
-
-		now := time.Now().In(loc)
-		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 1, 0, 0, loc)
-		sleepDur := time.Until(next)
-		log.Printf("😴 Бот уходит в сон до %s (через %s)", next.Format(time.RFC822), sleepDur.Round(time.Second))
-		time.Sleep(sleepDur)
-	}
-}
-
-func mustParseInt64(s string) int64 {
-	var id int64
-	_, err := fmt.Sscanf(s, "%d", &id)
+	reminders, err := loadReminders(reminderPath)
 	if err != nil {
-		log.Fatalf("Неверный формат числа: %s", s)
+		log.Fatalf("❌ Не могу загрузить напоминания: %v", err)
 	}
-	return id
-}
 
-func minimizeString(s string, max int) string {
-	cleaned := strings.ReplaceAll(s, "\n", " ")
-	cleaned = strings.ReplaceAll(cleaned, "\r", "")
-	cleaned = strings.ReplaceAll(cleaned, "\t", " ")
-	runes := []rune(cleaned)
-	if len(runes) <= max {
-		return cleaned
+	c := cron.New(cron.WithLocation(loc))
+
+	for _, r := range reminders {
+		if err := createCronJob(c, r, bot, chatID); err != nil {
+			log.Printf("⚠️ Ошибка добавления задачи [%s]: %v", r.Time, err)
+		}
 	}
-	return string(runes[:max]) + "..."
+
+	c.Start()
+	log.Println("📅 Все сообщения запланированы на отправку")
+
+	select {} // блокировка main потока
 }
