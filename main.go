@@ -146,12 +146,21 @@ func main() {
 			}
 			var sorted []TimedReminder
 
+			now := time.Now().In(loc)
+
 			for _, r := range reminders {
 				t, err := parseTime(r.Time)
 				if err != nil {
 					log.Printf("⚠️ Ошибка времени: %v", err)
 					continue
 				}
+
+				// Если время уже прошло в текущем дне — пропускаем
+				if t.Before(now) {
+					log.Printf("⏰ Время %s уже прошло, пропускаем", r.Time)
+					continue
+				}
+
 				sorted = append(sorted, TimedReminder{
 					Reminder: r,
 					When:     t,
