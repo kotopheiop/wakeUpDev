@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"github.com/anatoliyfedorenko/isdayoff"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
@@ -64,9 +65,22 @@ func isWeekend() bool {
 		Month:       &month,
 		Day:         &day,
 	}
-	dayType, _ := dayOff.Today(params)
+	dayType, err := dayOff.Today(params)
+
+	if err != nil || dayType == nil {
+		log.Printf("⚠️ Не удалось определить выходной: %v", err)
+		return false // лучше не пропускать напоминание в случае ошибки
+	}
 
 	return *dayType == isdayoff.DayTypeNonWorking
+}
+
+func truncate(s string, limit int) string {
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:limit])
 }
 
 func parseHourMinute(timeStr string) (hour, minute int, err error) {
@@ -100,7 +114,7 @@ func createCronJob(c *cron.Cron, r Reminder, bot *tgbotapi.BotAPI, chatID int64)
 		if _, err := bot.Send(msg); err != nil {
 			log.Printf("❌ Не отправлено [%s]: %v", r.Time, err)
 		} else {
-			log.Printf("✅ Отправлено [%s]: %s", r.Time, r.Message[:min(len(r.Message), 20)])
+			log.Printf("✅ Отправлено [%s]: %s", r.Time, truncate(r.Message, 20))
 		}
 	}
 
@@ -110,13 +124,6 @@ func createCronJob(c *cron.Cron, r Reminder, bot *tgbotapi.BotAPI, chatID int64)
 	}
 
 	return err
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func main() {
@@ -146,6 +153,9 @@ func main() {
 	reminders, err := loadReminders(reminderPath)
 	if err != nil {
 		log.Fatalf("❌ Не могу загрузить напоминания: %v", err)
+	}
+	if len(reminders) == 0 {
+		log.Fatalf("❌ Список напоминаний пуст, нечего запускать")
 	}
 
 	c := cron.New(cron.WithLocation(loc))
