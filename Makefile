@@ -57,3 +57,15 @@ logs:
 clean:
 	rm -f $(BIN) $(LOG_FILE) $(PID_FILE)
 	@echo "🗑️ Удалены файлы сборки и логов"
+
+docker-up:
+	docker compose -f docker/docker-compose.yml up -d --build
+	@echo "🚀 Wake Up Dev Bot запущен в фоне через docker-compose."
+	@echo "ℹ️ Для остановки и удаления контейнера воспользуйтесь командой 'make docker-down'"
+
+docker-down:
+	docker compose -f docker/docker-compose.yml down
+	@echo "🛑 Wake Up Dev Bot остановлен и контейнер удалён."
+
+
+

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  wakeupdev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: wakeupdev-bot
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    volumes:
+      - ../reminders.json:/app/reminders.json:ro
+      - ../.env:/app/.env:ro
+    working_dir: /app

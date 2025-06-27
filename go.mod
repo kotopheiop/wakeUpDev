@@ -1,4 +1,4 @@
-module dailyDevPing
+module wakeUpDev
 
 go 1.24
 
