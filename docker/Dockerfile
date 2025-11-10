@@ -1,9 +1,15 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
+# Настройка Go proxy для более надежной загрузки зависимостей
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
+ENV GOPRIVATE=
+
 COPY go.mod go.sum ./
-RUN go mod download
+# Повторяем попытку загрузки модулей при сетевых ошибках
+RUN go mod download || go mod download || go mod download
 COPY . .
 RUN go test -v ./...
 RUN go build -o wakeUpDev main.go
