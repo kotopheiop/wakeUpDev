@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/anatoliyfedorenko/isdayoff"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/joho/godotenv"
+	"github.com/kotopheiop/isdayoff"
 	"github.com/robfig/cron/v3"
 )
 
@@ -19,7 +19,10 @@ type Reminder struct {
 	Message string `json:"message"` // HTML-сообщение
 }
 
-var loc *time.Location
+var (
+	loc    *time.Location
+	dayOff *isdayoff.Client
+)
 
 func mustEnv(key string) string {
 	val := os.Getenv(key)
@@ -51,9 +54,11 @@ func loadReminders(path string) ([]Reminder, error) {
 }
 
 func isWeekend() bool {
-	now := time.Now().In(loc)
+	if dayOff == nil {
+		dayOff = isdayoff.New()
+	}
 
-	dayOff := isdayoff.New()
+	now := time.Now().In(loc)
 	countryCode := isdayoff.CountryCodeRussia
 	pre, covid := false, false
 	year, month, day := now.Date()
@@ -72,7 +77,8 @@ func isWeekend() bool {
 		return false // лучше не пропускать напоминание в случае ошибки
 	}
 
-	return *dayType == isdayoff.DayTypeNonWorking
+	// DayType "0" - рабочий день, "1" - выходной день
+	return *dayType == "1"
 }
 
 func truncate(s string, limit int) string {

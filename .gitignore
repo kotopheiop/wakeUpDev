@@ -3,3 +3,19 @@
 /run
 .env
 wakeUpDev
+dailyDevPing.exe
+
+# Coverage files
+coverage
+coverage.out
+*.out
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.o
+*.a

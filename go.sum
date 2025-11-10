@@ -1,9 +1,9 @@
-github.com/anatoliyfedorenko/isdayoff v1.0.2 h1:eDPM77cx96oziR97Sj0o+neuTUZRyD8HViB7QAqghv4=
-github.com/anatoliyfedorenko/isdayoff v1.0.2/go.mod h1:ZNmFWl1WXAg7qGqtVgUzy8ZhEQ1ESjkpX/ElWmoAILM=
 github.com/go-telegram-bot-api/telegram-bot-api v4.6.4+incompatible h1:2cauKuaELYAEARXRkq2LrJ0yDDv1rW7+wrTEdVL3uaU=
 github.com/go-telegram-bot-api/telegram-bot-api v4.6.4+incompatible/go.mod h1:qf9acutJ8cwBUhm1bqgz6Bei9/C/c93FPDljKWwsOgM=
 github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
 github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
+github.com/kotopheiop/isdayoff v0.0.0-20251110130656-0c3971d3ccc9 h1:hQC7eMDGglfW5uSWWvMlqNjKMssZFeybvcls7aQxfeE=
+github.com/kotopheiop/isdayoff v0.0.0-20251110130656-0c3971d3ccc9/go.mod h1:GGd/4GuImPyh5iekLHjKh0V9su80yTu9DsL0BgAK/PI=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
 github.com/technoweenie/multipartstreamer v1.0.1 h1:XRztA5MXiR1TIRHxH2uNxXxaIkKQDeX7m2XsSOlQEnM=
