@@ -150,7 +150,7 @@ func main() {
 		log.Fatalf("❌ Ошибка часового пояса: %v", err)
 	}
 
-	bot, err := tgbotapi.NewBotAPI(botToken)
+	bot, err := newTelegramBot(botToken)
 	if err != nil {
 		log.Fatalf("❌ Ошибка инициализации бота: %v", err)
 	}

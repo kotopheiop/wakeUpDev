@@ -6,17 +6,20 @@ import (
 	"testing"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
 func TestEnvVariables(t *testing.T) {
+	if testing.Short() {
+		t.Skip("требует .env на хосте: запуск без -short (make test)")
+	}
+
 	err := godotenv.Load(".env")
 	if err != nil {
 		t.Fatalf("Не удалось загрузить .env: %v", err)
 	}
 
-	requiredVars := []string{"BOT_TOKEN", "GROUP_CHAT_ID", "TIMEZONE"}
+	requiredVars := []string{"BOT_TOKEN", "GROUP_CHAT_ID", "REMINDERS_FILE", "TIMEZONE"}
 	for _, v := range requiredVars {
 		if os.Getenv(v) == "" {
 			t.Errorf("Переменная %s не задана", v)
@@ -50,6 +53,10 @@ func TestRemindersJSON(t *testing.T) {
 }
 
 func TestTelegramConnection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("интеграционный тест: запуск без -short (make test)")
+	}
+
 	err := godotenv.Load(".env")
 	if err != nil {
 		t.Fatalf("Не удалось загрузить .env: %v", err)
@@ -60,7 +67,7 @@ func TestTelegramConnection(t *testing.T) {
 		t.Skip("BOT_TOKEN не задан, пропускаем тест")
 	}
 
-	bot, err := tgbotapi.NewBotAPI(token)
+	bot, err := newTelegramBot(token)
 	if err != nil {
 		t.Fatalf("Ошибка авторизации бота: %v", err)
 	}
@@ -242,6 +249,163 @@ func TestIsWeekend(t *testing.T) {
 	result := isWeekend()
 	if result != true && result != false {
 		t.Error("isWeekend() должен возвращать true или false")
+	}
+}
+
+func TestParseTelegramProxyURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		host       string
+		userpwd    string
+		wantScheme string
+		wantHost   string
+		wantUser   string
+		wantPass   string
+		wantError  bool
+	}{
+		{
+			name:       "http host only",
+			host:       "127.0.0.1:8080",
+			wantScheme: "http",
+			wantHost:   "127.0.0.1:8080",
+		},
+		{
+			name:       "http with scheme",
+			host:       "http://proxy.example:3128",
+			wantScheme: "http",
+			wantHost:   "proxy.example:3128",
+		},
+		{
+			name:       "socks5",
+			host:       "socks5://127.0.0.1:1080",
+			wantScheme: "socks5",
+			wantHost:   "127.0.0.1:1080",
+		},
+		{
+			name:       "host and credentials",
+			host:       "proxy.example:8080",
+			userpwd:    "user:secret",
+			wantScheme: "http",
+			wantHost:   "proxy.example:8080",
+			wantUser:   "user",
+			wantPass:   "secret",
+		},
+		{
+			name:       "password with colon",
+			host:       "127.0.0.1:8080",
+			userpwd:    "user:sec:ret",
+			wantScheme: "http",
+			wantHost:   "127.0.0.1:8080",
+			wantUser:   "user",
+			wantPass:   "sec:ret",
+		},
+		{
+			name:       "credentials in host are kept",
+			host:       "http://user:pass@proxy.example:8080",
+			userpwd:    "other:wrong",
+			wantScheme: "http",
+			wantHost:   "proxy.example:8080",
+			wantUser:   "user",
+			wantPass:   "pass",
+		},
+		{
+			name:      "invalid userpwd",
+			host:      "127.0.0.1:8080",
+			userpwd:   "nocolon",
+			wantError: true,
+		},
+		{
+			name:      "unsupported scheme",
+			host:      "ftp://127.0.0.1:21",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTelegramProxyURL(tt.host, tt.userpwd)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("parseTelegramProxyURL() error = %v, wantError %v", err, tt.wantError)
+			}
+			if tt.wantError {
+				return
+			}
+
+			if got.Scheme != tt.wantScheme || got.Host != tt.wantHost {
+				t.Errorf("proxy URL = %s://%s, want %s://%s", got.Scheme, got.Host, tt.wantScheme, tt.wantHost)
+			}
+			if tt.wantUser != "" {
+				user := got.User.Username()
+				pass, _ := got.User.Password()
+				if user != tt.wantUser || pass != tt.wantPass {
+					t.Errorf("credentials = %q:%q, want %q:%q", user, pass, tt.wantUser, tt.wantPass)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadTelegramProxyConfig(t *testing.T) {
+	const (
+		hostKey    = "TELEGRAM_PROXY_HOST"
+		userpwdKey = "TELEGRAM_PROXY_USERPWD"
+	)
+
+	t.Setenv(hostKey, "")
+	t.Setenv(userpwdKey, "")
+	cfg, err := loadTelegramProxyConfig()
+	if err != nil {
+		t.Fatalf("loadTelegramProxyConfig() error = %v", err)
+	}
+	if cfg.enabled() {
+		t.Error("без TELEGRAM_PROXY_HOST прокси должен быть выключен")
+	}
+
+	t.Setenv(hostKey, "socks5://127.0.0.1:1080")
+	t.Setenv(userpwdKey, "")
+	cfg, err = loadTelegramProxyConfig()
+	if err != nil {
+		t.Fatalf("loadTelegramProxyConfig() error = %v", err)
+	}
+	if !cfg.enabled() {
+		t.Fatal("прокси должен быть включён")
+	}
+	if cfg.URL.Scheme != "socks5" {
+		t.Errorf("scheme = %q, want socks5", cfg.URL.Scheme)
+	}
+}
+
+func TestTelegramProxyTransport(t *testing.T) {
+	tests := []struct {
+		name   string
+		host   string
+		scheme string
+	}{
+		{"http", "http://127.0.0.1:8080", "http"},
+		{"socks5", "socks5://127.0.0.1:1080", "socks5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u, err := parseTelegramProxyURL(tt.host, "")
+			if err != nil {
+				t.Fatalf("parseTelegramProxyURL: %v", err)
+			}
+			cfg := telegramProxyConfig{URL: u}
+			tr, err := cfg.transport()
+			if err != nil {
+				t.Fatalf("transport() error = %v", err)
+			}
+			if tr == nil {
+				t.Fatal("transport() вернул nil")
+			}
+			if u.Scheme == "socks5" && tr.DialContext == nil {
+				t.Error("SOCKS5 transport должен иметь DialContext")
+			}
+			if u.Scheme == "http" && tr.Proxy == nil {
+				t.Error("HTTP transport должен иметь Proxy")
+			}
+		})
 	}
 }
 

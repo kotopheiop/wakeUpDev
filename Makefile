@@ -6,8 +6,15 @@ LOG_DIR = ./logs
 RUN_DIR = ./run
 LOG_FILE = $(LOG_DIR)/$(APP_NAME).log
 PID_FILE = $(RUN_DIR)/$(APP_NAME).pid
+COMPOSE_FILE = docker/docker-compose.yml
 
-.PHONY: .env test build run start stop logs clean
+# snap/go в WSL: /run/user/$UID часто недоступен — принудительно /tmp
+export XDG_RUNTIME_DIR := /tmp
+
+GO_TEST = go test -v ./...
+GO_TEST_SHORT = go test -short -v ./...
+
+.PHONY: .env test test-short build run start stop logs clean docker-up docker-down docker-build
 
 .env:
 	@if [ ! -f $(ENV_FILE) ]; then \
@@ -18,12 +25,16 @@ PID_FILE = $(RUN_DIR)/$(APP_NAME).pid
 	fi
 
 test: .env
-	@echo "🧪 Запуск тестов..."
-	@go test -v ./... && echo "✅ Тесты пройдены" || (echo "❌ Тесты не прошли. Сборка невозможна." && exit 1)
+	@echo "🧪 Запуск всех тестов (включая Telegram API)..."
+	@$(GO_TEST) && echo "✅ Тесты пройдены" || (echo "❌ Тесты не прошли." && exit 1)
 
-build: test
+test-short:
+	@echo "🧪 Запуск unit-тестов (-short)..."
+	@$(GO_TEST_SHORT) && echo "✅ Тесты пройдены" || (echo "❌ Тесты не прошли." && exit 1)
+
+build: test-short
 	@echo "🔧 Сборка $(APP_NAME)..."
-	@go build -o $(BIN) main.go
+	@go build -o $(BIN) .
 	@echo "✅ Сборка завершена"
 
 run: build
@@ -52,20 +63,25 @@ stop:
 	fi
 
 logs:
+	@if [ ! -f $(LOG_FILE) ]; then \
+		echo "⚠️ Лог-файл не найден: $(LOG_FILE). Сначала запустите make start"; \
+		exit 1; \
+	fi
 	@tail -f $(LOG_FILE)
 
 clean:
 	rm -f $(BIN) $(LOG_FILE) $(PID_FILE)
 	@echo "🗑️ Удалены файлы сборки и логов"
 
-docker-up:
-	docker compose -f docker/docker-compose.yml up -d --build
+docker-build: .env
+	@echo "🐳 Сборка Docker-образа..."
+	docker compose -f $(COMPOSE_FILE) build
+
+docker-up: .env
+	docker compose -f $(COMPOSE_FILE) up -d --build
 	@echo "🚀 Wake Up Dev Bot запущен в фоне через docker-compose."
-	@echo "ℹ️ Для остановки и удаления контейнера воспользуйтесь командой 'make docker-down'"
+	@echo "ℹ️ Для остановки: make docker-down"
 
 docker-down:
-	docker compose -f docker/docker-compose.yml down
+	docker compose -f $(COMPOSE_FILE) down
 	@echo "🛑 Wake Up Dev Bot остановлен и контейнер удалён."
-
-
-

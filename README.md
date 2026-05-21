@@ -17,6 +17,7 @@
 - ⚙️ Запуск в фоне или в активном режиме
 - 🧾 Ведение логов в `./logs/wakeUpDev.log`
 - 🐳 Возможность запуска в Docker контейнере
+- 🔒 Прокси для Telegram API (HTTP/HTTPS, SOCKS5)
 
 ## 📦 Пример конфига `reminders.json`
 
@@ -51,7 +52,36 @@
    BOT_TOKEN=your_telegram_bot_token
    REMINDERS_FILE=reminders.json
    GROUP_CHAT_ID=-1001234567890
-   TIME_LOCATION="Europe/Moscow"
+   TIMEZONE="Europe/Moscow"
+   ```
+
+   **Прокси (опционально)** — если Telegram API недоступен напрямую, задайте `TELEGRAM_PROXY_HOST`.
+   Прокси включается автоматически, когда этот ключ не пустой. Логин и пароль — в `TELEGRAM_PROXY_USERPWD`
+   (формат `user:password`, как в cURL).
+
+   | Переменная | Обязательна | Описание |
+   |------------|-------------|----------|
+   | `TELEGRAM_PROXY_HOST` | Нет | Адрес прокси. Без схемы подразумевается HTTP (`host:port` или `http://host:port`). Поддерживаются `http`, `https`, `socks5`, `socks5h` |
+   | `TELEGRAM_PROXY_USERPWD` | Нет | Учётные данные `user:password`. Не нужна, если логин уже в URL (`http://user:pass@host:port`) |
+
+   HTTP-прокси:
+
+   ```env
+   TELEGRAM_PROXY_HOST=127.0.0.1:8080
+   TELEGRAM_PROXY_USERPWD=myuser:mypassword
+   ```
+
+   SOCKS5:
+
+   ```env
+   TELEGRAM_PROXY_HOST=socks5://127.0.0.1:1080
+   TELEGRAM_PROXY_USERPWD=myuser:mypassword
+   ```
+
+   Учётные данные в URL (тогда `TELEGRAM_PROXY_USERPWD` можно не задавать):
+
+   ```env
+   TELEGRAM_PROXY_HOST=http://myuser:mypassword@127.0.0.1:8080
    ```
 
 2. Создайте файл `reminders.json` с нужным расписанием.
@@ -82,17 +112,24 @@
 
 ## 🛠 Команды Makefile
 
-| Команда            | Описание                                          |
-|--------------------|---------------------------------------------------|
-| `make .env`        | Создание `.env` из `.env.example`                 |
-| `make test`        | Запуск тестов                                     |
-| `make build`       | Сборка бинарника                                  |
-| `make start`       | Сборка, запуск в фоне, лог в `logs/`              |
-| `make run`         | Сборка и запуск в активном режиме (stdout)        |
-| `make stop`        | Завершение процесса по PID из `run/wakeUpDev.pid` |
-| `make logs`        | Просмотр логов в `logs/wakeUpDev.log`             |
-| `make docker-up`   | Сборка и запуск контейнера через Docker Compose   |
-| `make docker-down` | Остановка контейнера                              |
+| Команда              | Описание                                                       |
+|----------------------|----------------------------------------------------------------|
+| `make .env`          | Создание `.env` из `.env.example`                              |
+| `make test`          | Все тесты, включая проверку Telegram API                       |
+| `make test-short`    | Только unit-тесты (без сети, как при `make build` / Docker)    |
+| `make build`         | `test-short` + сборка бинарника `./wakeUpDev`                  |
+| `make run`           | Сборка и запуск в активном режиме (stdout)                     |
+| `make start`         | Сборка, запуск в фоне, лог в `logs/`                           |
+| `make stop`          | Завершение процесса по PID из `run/wakeUpDev.pid`              |
+| `make logs`          | Просмотр логов в `logs/wakeUpDev.log`                          |
+| `make clean`         | Удаление бинарника, PID-файла и лога                           |
+| `make docker-build`  | Сборка Docker-образа без запуска                               |
+| `make docker-up`     | Сборка и запуск контейнера через Docker Compose                |
+| `make docker-down`   | Остановка контейнера                                           |
+
+> **Docker:** при сборке образа выполняется `go test -short` (без обращения к Telegram).
+> Секреты из `.env` в образ не попадают (см. `.dockerignore`). Конфиг и расписание
+> монтируются из хоста; в `.env` для Docker удобно `REMINDERS_FILE=reminders.json`.
 
 ---
 
@@ -107,15 +144,18 @@
 Проект включает набор unit-тестов для проверки основных функций:
 
 ```bash
-# Запуск всех тестов
+# Unit-тесты (быстро, без Telegram API)
+make test-short
+
+# Полный прогон, включая TestTelegramConnection
 make test
 
-# Запуск тестов с покрытием
-go test -v -coverprofile=coverage.out .
+# Покрытие
+go test -short -coverprofile=coverage.out .
 go tool cover -html=coverage.out
 ```
 
-**Покрытие тестами:** 37.8% (основные функции: `parseHourMinute`, `truncate`, `loadReminders`, `mustParseInt64`, `isWeekend`)
+**Покрытие тестами:** 37.8% (основные функции: `parseHourMinute`, `truncate`, `loadReminders`, `mustParseInt64`, `isWeekend`, настройка прокси)
 
 ---
 
