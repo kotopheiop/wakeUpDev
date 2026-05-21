@@ -1,0 +1,22 @@
+# Секреты и локальная конфигурация
+.env
+.env.*
+
+# Артефакты сборки и рантайм
+wakeUpDev
+*.exe
+logs/
+run/
+coverage
+coverage.out
+*.out
+*.test
+
+# IDE и git
+.git
+.gitignore
+.idea
+
+# Документация (не нужна в образе)
+README.md
+LICENSE
