@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/kotopheiop/isdayoff"
 )
 
 func TestEnvVariables(t *testing.T) {
@@ -19,7 +19,7 @@ func TestEnvVariables(t *testing.T) {
 		t.Fatalf("Не удалось загрузить .env: %v", err)
 	}
 
-	requiredVars := []string{"BOT_TOKEN", "GROUP_CHAT_ID", "REMINDERS_FILE", "TIMEZONE"}
+	requiredVars := []string{"BOT_TOKEN", "REMINDERS_FILE", "TIMEZONE"}
 	for _, v := range requiredVars {
 		if os.Getenv(v) == "" {
 			t.Errorf("Переменная %s не задана", v)
@@ -28,26 +28,26 @@ func TestEnvVariables(t *testing.T) {
 }
 
 func TestRemindersJSON(t *testing.T) {
-	data, err := os.ReadFile("reminders.json")
+	cfg, err := loadConfig("reminders.json", 0)
 	if err != nil {
-		t.Fatalf("Не удалось прочитать reminders.json: %v", err)
+		t.Fatalf("Ошибка загрузки reminders.json: %v", err)
 	}
 
-	var reminders []Reminder
-	if err := json.Unmarshal(data, &reminders); err != nil {
-		t.Fatalf("Ошибка парсинга reminders.json: %v", err)
+	if len(cfg.Chats) == 0 {
+		t.Fatal("Файл reminders.json не содержит чатов")
 	}
 
-	if len(reminders) == 0 {
-		t.Error("Файл reminders.json пуст")
-	}
-
-	for i, r := range reminders {
-		if r.Time == "" {
-			t.Errorf("Reminder #%d: поле time пустое", i)
+	for ci, chat := range cfg.Chats {
+		if chat.ChatID == 0 {
+			t.Errorf("Chat #%d: chat_id не задан", ci)
 		}
-		if r.Message == "" {
-			t.Errorf("Reminder #%d: поле message пустое", i)
+		for i, r := range chat.Reminders {
+			if r.Time == "" {
+				t.Errorf("Chat #%d Reminder #%d: поле time пустое", ci, i)
+			}
+			if r.Message == "" {
+				t.Errorf("Chat #%d Reminder #%d: поле message пустое", ci, i)
+			}
 		}
 	}
 }
@@ -145,58 +145,105 @@ func TestTruncate(t *testing.T) {
 	}
 }
 
-func TestLoadReminders(t *testing.T) {
-	// Создаём временный файл с валидными данными
+func TestLoadConfig_NewFormat(t *testing.T) {
+	validJSON := `{
+		"chats": [
+			{
+				"name": "Тестовый чат",
+				"chat_id": -100111,
+				"reminders": [
+					{"time": "10:00", "message": "Test 1", "pre_holiday_early": true},
+					{"time": "12:00", "message": "Test 2", "last_working_day": true}
+				]
+			},
+			{
+				"chat_id": -100222,
+				"reminders": [
+					{"time": "09:00", "message": "Other chat"}
+				]
+			}
+		]
+	}`
+	tmpFile := writeTempJSON(t, validJSON)
+	defer os.Remove(tmpFile)
+
+	cfg, err := loadConfig(tmpFile, 0)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if len(cfg.Chats) != 2 {
+		t.Fatalf("loadConfig() вернул %d чатов, ожидалось 2", len(cfg.Chats))
+	}
+	if cfg.Chats[0].ChatID != -100111 || cfg.Chats[0].Name != "Тестовый чат" || len(cfg.Chats[0].Reminders) != 2 {
+		t.Error("некорректные данные первого чата")
+	}
+	if !cfg.Chats[0].Reminders[0].PreHolidayEarly {
+		t.Error("ожидался pre_holiday_early=true")
+	}
+	if !cfg.Chats[0].Reminders[1].LastWorkingDay {
+		t.Error("ожидался last_working_day=true")
+	}
+}
+
+func TestLoadConfig_LegacyFormat(t *testing.T) {
 	validJSON := `[
 		{"time": "10:00", "message": "Test message 1"},
 		{"time": "12:00", "message": "Test message 2"}
 	]`
-	tmpFile, err := os.CreateTemp("", "test_reminders_*.json")
-	if err != nil {
-		t.Fatalf("Не удалось создать временный файл: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
+	tmpFile := writeTempJSON(t, validJSON)
+	defer os.Remove(tmpFile)
 
-	if _, err := tmpFile.WriteString(validJSON); err != nil {
-		t.Fatalf("Не удалось записать в файл: %v", err)
-	}
-	tmpFile.Close()
-
-	reminders, err := loadReminders(tmpFile.Name())
+	cfg, err := loadConfig(tmpFile, -999)
 	if err != nil {
-		t.Fatalf("loadReminders() error = %v", err)
+		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if len(reminders) != 2 {
-		t.Errorf("loadReminders() вернул %d напоминаний, ожидалось 2", len(reminders))
+	if len(cfg.Chats) != 1 || cfg.Chats[0].ChatID != -999 {
+		t.Errorf("legacy format: %+v", cfg)
 	}
-	if reminders[0].Time != "10:00" || reminders[0].Message != "Test message 1" {
-		t.Errorf("loadReminders() некорректные данные первого напоминания")
+	if len(cfg.Chats[0].Reminders) != 2 {
+		t.Errorf("loadConfig() вернул %d напоминаний, ожидалось 2", len(cfg.Chats[0].Reminders))
 	}
 }
 
-func TestLoadReminders_InvalidJSON(t *testing.T) {
-	tmpFile, err := os.CreateTemp("", "test_invalid_*.json")
-	if err != nil {
-		t.Fatalf("Не удалось создать временный файл: %v", err)
-	}
-	defer os.Remove(tmpFile.Name())
+func TestLoadConfig_LegacyWithoutChatID(t *testing.T) {
+	validJSON := `[{"time": "10:00", "message": "Test"}]`
+	tmpFile := writeTempJSON(t, validJSON)
+	defer os.Remove(tmpFile)
 
-	if _, err := tmpFile.WriteString("invalid json"); err != nil {
-		t.Fatalf("Не удалось записать в файл: %v", err)
-	}
-	tmpFile.Close()
-
-	_, err = loadReminders(tmpFile.Name())
+	_, err := loadConfig(tmpFile, 0)
 	if err == nil {
-		t.Error("loadReminders() должен вернуть ошибку для невалидного JSON")
+		t.Error("loadConfig() должен требовать GROUP_CHAT_ID для legacy-формата")
 	}
 }
 
-func TestLoadReminders_FileNotFound(t *testing.T) {
-	_, err := loadReminders("nonexistent_file.json")
+func TestLoadConfig_InvalidJSON(t *testing.T) {
+	tmpFile := writeTempJSON(t, "invalid json")
+	defer os.Remove(tmpFile)
+
+	_, err := loadConfig(tmpFile, 0)
 	if err == nil {
-		t.Error("loadReminders() должен вернуть ошибку для несуществующего файла")
+		t.Error("loadConfig() должен вернуть ошибку для невалидного JSON")
 	}
+}
+
+func TestLoadConfig_FileNotFound(t *testing.T) {
+	_, err := loadConfig("nonexistent_file.json", 0)
+	if err == nil {
+		t.Error("loadConfig() должен вернуть ошибку для несуществующего файла")
+	}
+}
+
+func writeTempJSON(t *testing.T, content string) string {
+	t.Helper()
+	tmpFile, err := os.CreateTemp("", "test_config_*.json")
+	if err != nil {
+		t.Fatalf("Не удалось создать временный файл: %v", err)
+	}
+	if _, err := tmpFile.WriteString(content); err != nil {
+		t.Fatalf("Не удалось записать в файл: %v", err)
+	}
+	tmpFile.Close()
+	return tmpFile.Name()
 }
 
 func TestMustParseInt64(t *testing.T) {
@@ -231,24 +278,72 @@ func TestMustParseInt64(t *testing.T) {
 	}
 }
 
-func TestIsWeekend(t *testing.T) {
-	// Устанавливаем локацию для теста
+func TestIsNonWorkingDay(t *testing.T) {
 	testLoc, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
 		t.Fatalf("Не удалось загрузить локацию: %v", err)
 	}
-	// Сохраняем оригинальную локацию
 	originalLoc := loc
 	defer func() { loc = originalLoc }()
-
-	// Устанавливаем тестовую локацию
 	loc = testLoc
 
-	// Тест может зависеть от реального API, поэтому просто проверяем, что функция выполняется
-	// и возвращает булево значение
-	result := isWeekend()
+	result := isNonWorkingDay()
 	if result != true && result != false {
-		t.Error("isWeekend() должен возвращать true или false")
+		t.Error("isNonWorkingDay() должен возвращать true или false")
+	}
+}
+
+func TestSubtractHour(t *testing.T) {
+	tests := []struct {
+		hour, minute int
+		wantH, wantM int
+	}{
+		{10, 30, 9, 30},
+		{0, 0, 23, 0},
+		{1, 15, 0, 15},
+	}
+	for _, tt := range tests {
+		h, m := subtractHour(tt.hour, tt.minute)
+		if h != tt.wantH || m != tt.wantM {
+			t.Errorf("subtractHour(%d:%d) = %d:%d, want %d:%d", tt.hour, tt.minute, h, m, tt.wantH, tt.wantM)
+		}
+	}
+}
+
+func TestMatchPreHolidaySlot(t *testing.T) {
+	tests := []struct {
+		name            string
+		preHolidayEarly bool
+		slot            sendSlot
+		preHoliday      bool
+		want            bool
+	}{
+		{"обычное напоминание", false, sendSlotNormal, false, true},
+		{"обычное — ранний слот игнорируется", false, sendSlotEarly, true, false},
+		{"предпраздничный — ранний слот", true, sendSlotEarly, true, true},
+		{"предпраздничный — обычный слот пропуск", true, sendSlotNormal, true, false},
+		{"не предпраздничный — обычный слот", true, sendSlotNormal, false, true},
+		{"не предпраздничный — ранний слот пропуск", true, sendSlotEarly, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchPreHolidaySlot(tt.preHolidayEarly, tt.slot, tt.preHoliday)
+			if got != tt.want {
+				t.Errorf("matchPreHolidaySlot() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsWorkingDayType(t *testing.T) {
+	if !isWorkingDayType(isdayoff.DayTypeWorking) {
+		t.Error("рабочий день должен считаться рабочим")
+	}
+	if !isWorkingDayType(isdayoff.DayTypeHalfHoliday) {
+		t.Error("сокращённый день должен считаться рабочим")
+	}
+	if isWorkingDayType(isdayoff.DayTypeNonWorking) {
+		t.Error("выходной не должен считаться рабочим")
 	}
 }
 
@@ -409,10 +504,30 @@ func TestTelegramProxyTransport(t *testing.T) {
 	}
 }
 
+func TestChatLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		chat ChatConfig
+		want string
+	}{
+		{"с именем", ChatConfig{Name: "ПР", ChatID: -100}, "ПР (chat=-100)"},
+		{"без имени", ChatConfig{ChatID: -200}, "chat=-200"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chatLabel(tt.chat); got != tt.want {
+				t.Errorf("chatLabel() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReminderStruct(t *testing.T) {
 	r := Reminder{
-		Time:    "10:00",
-		Message: "Test message",
+		Time:            "10:00",
+		Message:         "Test message",
+		PreHolidayEarly: true,
+		LastWorkingDay:  true,
 	}
 
 	if r.Time != "10:00" {
@@ -420,5 +535,8 @@ func TestReminderStruct(t *testing.T) {
 	}
 	if r.Message != "Test message" {
 		t.Errorf("Reminder.Message = %q, want %q", r.Message, "Test message")
+	}
+	if !r.PreHolidayEarly || !r.LastWorkingDay {
+		t.Error("ожидались флаги pre_holiday_early и last_working_day")
 	}
 }
